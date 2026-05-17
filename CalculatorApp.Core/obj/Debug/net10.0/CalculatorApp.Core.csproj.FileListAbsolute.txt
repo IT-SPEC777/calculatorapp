@@ -1,0 +1,11 @@
+C:\Repository\CalculatorApp\CalculatorApp.Core\bin\Debug\net10.0\CalculatorApp.Core.deps.json
+C:\Repository\CalculatorApp\CalculatorApp.Core\bin\Debug\net10.0\CalculatorApp.Core.dll
+C:\Repository\CalculatorApp\CalculatorApp.Core\bin\Debug\net10.0\CalculatorApp.Core.pdb
+C:\Repository\CalculatorApp\CalculatorApp.Core\obj\Debug\net10.0\CalculatorApp.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Repository\CalculatorApp\CalculatorApp.Core\obj\Debug\net10.0\CalculatorApp.Core.AssemblyInfoInputs.cache
+C:\Repository\CalculatorApp\CalculatorApp.Core\obj\Debug\net10.0\CalculatorApp.Core.AssemblyInfo.cs
+C:\Repository\CalculatorApp\CalculatorApp.Core\obj\Debug\net10.0\CalculatorApp.Core.csproj.CoreCompileInputs.cache
+C:\Repository\CalculatorApp\CalculatorApp.Core\obj\Debug\net10.0\CalculatorApp.Core.dll
+C:\Repository\CalculatorApp\CalculatorApp.Core\obj\Debug\net10.0\refint\CalculatorApp.Core.dll
+C:\Repository\CalculatorApp\CalculatorApp.Core\obj\Debug\net10.0\CalculatorApp.Core.pdb
+C:\Repository\CalculatorApp\CalculatorApp.Core\obj\Debug\net10.0\ref\CalculatorApp.Core.dll

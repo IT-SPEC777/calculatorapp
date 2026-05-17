@@ -1,0 +1,181 @@
+# ============================================================
+# GitFlic CI/CD Pipeline для CalculatorApp
+# Air-gapped среда | Shell-раннер | .NET 10.0
+# ============================================================
+
+# Базовый Docker-образ для всех задач (должен быть доступен локально)
+image: mcr.microsoft.com/dotnet/sdk:10.0
+
+# Глобальные переменные (доступны во всех задачах пайплайна)
+variables:
+  BUILD_CONFIGURATION: "Release"   # Конфигурация сборки: Debug / Release
+  DOCKER_IMAGE: "calculator-app"   # Имя Docker-образа (для будущего использования)
+
+# Порядок выполнения стадий — строго сверху вниз
+stages:
+  - build-test   # Стадия 1: Сборка + модульные тесты + интеграционные тесты
+  - lint         # Стадия 2: Линтеры — форматирование, стиль, строгие анализаторы
+  - analyze      # Стадия 3: Анализ кода — покрытие тестами, предупреждения
+  - deploy       # Стадия 4: Ручной деплой приложения на сервер (порт 5000)
+
+# ============================================================
+# КЭШИРОВАНИЕ
+# Ускоряет повторные запуски — не скачивает пакеты заново
+# ============================================================
+cache:
+  key: "${CI_COMMIT_REF_SLUG}"   # Ключ кэша = имя ветки (main, develop, feature/...)
+  paths:
+    - ~/.nuget/packages/         # Глобальный кэш NuGet-пакетов (все проекты)
+    - .nuget/packages/           # Локальный кэш NuGet-пакетов (в репозитории)
+
+# ============================================================
+# ПОДГОТОВКА ПЕРЕД КАЖДОЙ ЗАДАЧЕЙ
+# Выполняется перед script в каждой задаче
+# ============================================================
+before_script:
+  - dotnet --version                                       # Показать версию .NET SDK (для отладки)
+  - dotnet restore CalculatorApp.slnx                      # Восстановить все NuGet-зависимости из solution
+
+# ============================================================
+# СТАДИЯ 1: СБОРКА И ТЕСТЫ
+# Самая важная стадия — если падает, пайплайн останавливается
+# ============================================================
+build-test:
+  stage: build-test
+  script:
+    # Многострочная команда через | — всё выполняется в одной shell-сессии
+    # 2>&1 — перенаправить stderr в stdout (ошибки видны в логах)
+    # | tee файл.log — вывод и в консоль, и в файл (для артефактов)
+    - |
+      echo "=== BUILD START ==="
+      dotnet build CalculatorApp.slnx --configuration Release --no-restore 2>&1 | tee build.log
+      echo "=== BUILD DONE ==="
+      
+      echo "=== UNIT TESTS START ==="
+      # Запуск модульных тестов (CalculatorTests)
+      # --filter — только тесты с "CalculatorTests" в имени
+      # --logger junit — вывод результатов в JUnit-формате для GitFlic
+      dotnet test CalculatorApp.slnx --configuration Release --filter "FullyQualifiedName~CalculatorTests" --logger "junit;LogFilePath=unit-test-results.xml" 2>&1 | tee unit-test.log
+      echo "=== UNIT TESTS DONE ==="
+      
+      echo "=== INTEGRATION TESTS START ==="
+      # Запуск интеграционных тестов (CalculatorApiTests)
+      dotnet test CalculatorApp.slnx --configuration Release --filter "FullyQualifiedName~IntegrationTests" --logger "junit;LogFilePath=integration-test-results.xml" 2>&1 | tee integration-test.log
+      echo "=== INTEGRATION TESTS DONE ==="
+
+  # Артефакты — файлы, сохраняемые после выполнения задачи
+  artifacts:
+    when: always   # Сохранять ВСЕГДА: и при успехе, и при падении тестов
+    paths:
+      - build.log            # Лог сборки
+      - unit-test.log        # Лог модульных тестов
+      - integration-test.log # Лог интеграционных тестов
+    reports:
+      junit:       # JUnit-отчёты для красивого отображения в интерфейсе GitFlic
+        - '**/unit-test-results.xml'        # Результаты модульных тестов
+        - '**/integration-test-results.xml' # Результаты интеграционных тестов
+  tags:
+    - shell        # Выполнять на раннере с тегом "shell" (Thorin Oakenshield)
+
+# ============================================================
+# СТАДИЯ 2: ЛИНТЕРЫ
+# Проверка качества кода — информационные, не блокируют пайплайн
+# ============================================================
+
+# Линтер 1: Проверка форматирования кода
+# Проверяет отступы, пробелы, переносы строк согласно .editorconfig
+lint-format:
+  stage: lint
+  script:
+    # --verify-no-changes — упадёт с ошибкой, если код не соответствует форматированию
+    # --verbosity diagnostic — максимально подробный вывод (какой файл, какая строка)
+    - dotnet format CalculatorApp.slnx --verify-no-changes --verbosity diagnostic
+  allow_failure: true   # ❗ Не блокирует пайплайн — носит информационный характер
+  tags:
+    - shell
+
+# Линтер 2: Проверка стиля кода
+# Проверяет именование переменных, модификаторы доступа, рекомендации IDE
+lint-style:
+  stage: lint
+  script:
+    # --severity info — проверять даже информационные сообщения (самый строгий режим)
+    # --verify-no-changes — упадёт при любом несоответствии стилю
+    - dotnet format CalculatorApp.slnx --severity info --verify-no-changes
+  allow_failure: true   # ❗ Не блокирует пайплайн
+  tags:
+    - shell
+
+# Линтер 3: Строгие анализаторы
+# Все предупреждения компилятора считаются ошибками
+lint-analyzers:
+  stage: lint
+  script:
+    # /warnaserror — любое предупреждение (warning) = ошибка (error), сборка упадёт
+    # /p:TreatWarningsAsErrors=true — дублирующий флаг для надёжности
+    # Это заставляет исправлять ВСЕ предупреждения перед мержем в main
+    - dotnet build CalculatorApp.slnx --configuration Release /warnaserror /p:TreatWarningsAsErrors=true
+  allow_failure: true   # ❗ Не блокирует пайплайн (пока)
+  tags:
+    - shell
+
+# ============================================================
+# СТАДИЯ 3: АНАЛИЗ КОДА
+# Сбор покрытия кода тестами (Code Coverage)
+# ============================================================
+code-analysis:
+  stage: analyze
+  script:
+    # Повторная сборка для чистоты эксперимента
+    - dotnet build CalculatorApp.slnx --configuration Release --no-restore
+    # Запуск ВСЕХ тестов со сборщиком покрытия кода
+    # --collect:"XPlat Code Coverage" — кросс-платформенный сборщик покрытия
+    # Результат: файл coverage.cobertura.xml в папке TestResults
+    - dotnet test CalculatorApp.slnx --configuration Release --no-build --collect:"XPlat Code Coverage"
+  allow_failure: true   # ❗ Не блокирует пайплайн
+  tags:
+    - shell
+
+# ============================================================
+# СТАДИЯ 4: ДЕПЛОЙ
+# Ручной запуск — нужно нажать кнопку ▶️ в интерфейсе GitFlic
+# ============================================================
+deploy:
+  stage: deploy
+  script:
+    # Шаг 1: Остановить текущее приложение (если запущено)
+    # pkill — убить процесс по имени
+    # || true — если процесса нет, не падать с ошибкой
+    - pkill -f "dotnet CalculatorApp.Api.dll" || true
+
+    # Шаг 2: Опубликовать приложение
+    # -c Release — релизная сборка (оптимизированная)
+    # -o /opt/calculator-app — выходная папка для публикации
+    - dotnet publish CalculatorApp.Api/CalculatorApp.Api.csproj -c Release -o /opt/calculator-app
+
+    # Шаг 3: Запустить приложение в фоновом режиме
+    # nohup — не завершать процесс при закрытии терминала
+    # & — запустить в фоне (вернуть управление в консоль)
+    # --urls "http://0.0.0.0:5000" — слушать на всех интерфейсах, порт 5000
+    # > /var/log/calculator-app.log — логи приложения писать в файл
+    # 2>&1 — ошибки тоже писать в тот же файл
+    - nohup dotnet /opt/calculator-app/CalculatorApp.Api.dll --urls "http://0.0.0.0:5000" > /var/log/calculator-app.log 2>&1 &
+
+  only:
+    - main          # Деплой ТОЛЬКО из ветки main (production)
+  tags:
+    - shell         # Выполнять на shell-раннере
+  when: manual      # РУЧНОЙ ЗАПУСК — требует нажатия кнопки ▶️ в интерфейсе
+
+# ============================================================
+# ПОЛЕЗНАЯ ИНФОРМАЦИЯ
+# ============================================================
+# 1. Все линтеры имеют allow_failure: true — пайплайн не блокируется
+# 2. Только build-test блокирует пайплайн при ошибке
+# 3. Деплой ручной — нужно нажать кнопку в CI/CD → Pipelines
+# 4. После деплоя приложение доступно на http://localhost:5000
+# 5. Логи приложения: /var/log/calculator-app.log
+# 6. Healthcheck: http://localhost:5000/health
+# 7. Swagger: http://localhost:5000/swagger
+# 8. Для остановки: pkill -f "dotnet CalculatorApp.Api.dll"
+# ============================================================
