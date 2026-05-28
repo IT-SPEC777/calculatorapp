@@ -1,0 +1,424 @@
+# ============================================================
+# GitFlic CI/CD Pipeline — УНИВЕРСАЛЬНЫЙ ШАБЛОН
+# Air-gapped среда | Shell-раннер
+# Последнее обновление: 2026-05-28
+# ============================================================
+#
+# КАК АДАПТИРОВАТЬ ПОД ДРУГИЕ ЯЗЫКИ:
+#   Ищите комментарии с тегом #LANG — там указано, что менять.
+#   Для каждого языка приведены примеры команд.
+#
+# ============================================================
+# ОГЛАВЛЕНИЕ ПО ЯЗЫКАМ:
+#   .NET (C#)    — секции отмечены #LANG:.NET
+#   Java (Maven) — секции отмечены #LANG:JAVA
+#   Node.js      — секции отмечены #LANG:NODE
+#   Python       — секции отмечены #LANG:PYTHON
+#   Go           — секции отмечены #LANG:GO
+# ============================================================
+
+image: mcr.microsoft.com/dotnet/sdk:10.0  #LANG:.NET — базовый образ для .NET
+# image: maven:3.9-eclipse-temurin-21      #LANG:JAVA — базовый образ для Java/Maven
+# image: node:20-alpine                     #LANG:NODE — базовый образ для Node.js
+# image: python:3.12-alpine                 #LANG:PYTHON — базовый образ для Python
+# image: golang:1.22-alpine                 #LANG:GO — базовый образ для Go
+
+variables:
+  # ============================================================
+  # ОБЩИЕ НАСТРОЙКИ (одинаковы для всех языков)
+  # ============================================================
+  DOCKER_IMAGE: "calculator-app"       # Имя Docker-образа
+  CONTAINER_NAME: "calculator-api"     # Имя контейнера (уникально на сервере)
+  APP_PORT: "5000"                     # Внешний порт для доступа к приложению
+  INTERNAL_PORT: "80"                  # Внутренний порт контейнера
+  LOG_DIR: "/var/log/calculator-app"   # Папка для логов
+  PUBLISH_ARTIFACT: "true"             # Публиковать артефакты
+  BUILD_DOCKER: "true"                 # Собирать Docker-образ
+
+  # ============================================================
+  # НАСТРОЙКА СБОРКИ (меняется под язык) #LANG
+  # ============================================================
+  BUILD_CONFIGURATION: "Release"       #LANG:.NET — Release/Debug
+  # BUILD_CONFIGURATION: ""            #LANG:JAVA — не используется
+  # BUILD_CONFIGURATION: ""            #LANG:NODE — не используется
+  # BUILD_CONFIGURATION: ""            #LANG:PYTHON — не используется
+  # BUILD_CONFIGURATION: ""            #LANG:GO — не используется
+
+  # Файл проекта/решения (меняется под язык) #LANG
+  SOLUTION_FILE: "CalculatorApp.slnx"  #LANG:.NET — файл .slnx или .sln
+  # SOLUTION_FILE: "pom.xml"           #LANG:JAVA — файл pom.xml
+  # SOLUTION_FILE: "package.json"      #LANG:NODE — файл package.json
+  # SOLUTION_FILE: "pyproject.toml"    #LANG:PYTHON — файл pyproject.toml
+  # SOLUTION_FILE: "go.mod"            #LANG:GO — файл go.mod
+
+  # Директория с исходным кодом (меняется под язык) #LANG
+  SRC_DIR: "."                         #LANG:.NET — корень решения
+  # SRC_DIR: "."                       #LANG:JAVA — корень с pom.xml
+  # SRC_DIR: "."                       #LANG:NODE — корень с package.json
+  # SRC_DIR: "src/"                    #LANG:PYTHON — папка с исходниками
+  # SRC_DIR: "./cmd/app/"              #LANG:GO — папка с main.go
+
+  # Команда сборки (меняется под язык) #LANG
+  BUILD_CMD: "dotnet build ${SOLUTION_FILE} --configuration ${BUILD_CONFIGURATION} --no-restore"
+  # BUILD_CMD: "mvn compile -B"                       #LANG:JAVA
+  # BUILD_CMD: "npm run build"                         #LANG:NODE
+  # BUILD_CMD: "python -m compileall ${SRC_DIR}"       #LANG:PYTHON
+  # BUILD_CMD: "go build -o app ${SRC_DIR}"            #LANG:GO
+
+  # ============================================================
+  # НАСТРОЙКА ТЕСТОВ (меняется под язык) #LANG
+  # ============================================================
+  TEST_CMD: "dotnet test ${SOLUTION_FILE} --configuration ${BUILD_CONFIGURATION} --no-build"
+  # TEST_CMD: "mvn test -B"                            #LANG:JAVA
+  # TEST_CMD: "npm test"                                #LANG:NODE
+  # TEST_CMD: "pytest"                                  #LANG:PYTHON
+  # TEST_CMD: "go test ./..."                           #LANG:GO
+
+  # Фильтр для модульных тестов (меняется под язык) #LANG
+  UNIT_TEST_FILTER: "--filter \"FullyQualifiedName~CalculatorTests\""
+  # UNIT_TEST_FILTER: "-Dtest=*Test"                   #LANG:JAVA
+  # UNIT_TEST_FILTER: "-- --testPathPattern=\"unit\""   #LANG:NODE
+  # UNIT_TEST_FILTER: "-m \"unit\""                     #LANG:PYTHON
+  # UNIT_TEST_FILTER: "-run \"Test\""                   #LANG:GO
+
+  # Фильтр для интеграционных тестов (меняется под язык) #LANG
+  INTEGRATION_TEST_FILTER: "--filter \"FullyQualifiedName~IntegrationTests\""
+  # INTEGRATION_TEST_FILTER: "-Dtest=*IT"              #LANG:JAVA
+  # INTEGRATION_TEST_FILTER: "-- --testPathPattern=\"integration\"" #LANG:NODE
+  # INTEGRATION_TEST_FILTER: "-m \"integration\""       #LANG:PYTHON
+  # INTEGRATION_TEST_FILTER: "-run \"Integration\""     #LANG:GO
+
+  # ============================================================
+  # НАСТРОЙКА ПУБЛИКАЦИИ АРТЕФАКТОВ (меняется под язык) #LANG
+  # ============================================================
+  PACK_CMD: "dotnet pack CalculatorApp.Core/CalculatorApp.Core.csproj -c Release -o ./artifacts"
+  # PACK_CMD: "mvn package -B -DskipTests"             #LANG:JAVA
+  # PACK_CMD: "npm pack"                                #LANG:NODE
+  # PACK_CMD: "python -m build"                         #LANG:PYTHON
+  # PACK_CMD: "tar -czf app.tar.gz app"                 #LANG:GO
+
+  # Тип артефакта (меняется под язык) #LANG
+  ARTIFACT_TYPE: "nuget"
+  # ARTIFACT_TYPE: "maven"                              #LANG:JAVA
+  # ARTIFACT_TYPE: "npm"                                #LANG:NODE
+  # ARTIFACT_TYPE: "pypi"                               #LANG:PYTHON
+  # ARTIFACT_TYPE: "generic"                            #LANG:GO
+
+  # Путь к артефактам для публикации (меняется под язык) #LANG
+  ARTIFACT_PATH: "./artifacts/*.nupkg"
+  # ARTIFACT_PATH: "./target/*.jar"                    #LANG:JAVA
+  # ARTIFACT_PATH: "./*.tgz"                            #LANG:NODE
+  # ARTIFACT_PATH: "./dist/*.whl"                       #LANG:PYTHON
+  # ARTIFACT_PATH: "./app.tar.gz"                       #LANG:GO
+
+  # ============================================================
+  # НАСТРОЙКА ЛИНТЕРОВ (меняется под язык) #LANG
+  # ============================================================
+  LINT_FORMAT_CMD: "dotnet format ${SOLUTION_FILE} --verify-no-changes --verbosity diagnostic"
+  # LINT_FORMAT_CMD: "mvn checkstyle:check"            #LANG:JAVA
+  # LINT_FORMAT_CMD: "npx eslint ."                     #LANG:NODE
+  # LINT_FORMAT_CMD: "ruff check ${SRC_DIR}"            #LANG:PYTHON
+  # LINT_FORMAT_CMD: "golangci-lint run"                #LANG:GO
+
+  LINT_STYLE_CMD: "dotnet format ${SOLUTION_FILE} --severity info --verify-no-changes"
+  # LINT_STYLE_CMD: "mvn pmd:check"                    #LANG:JAVA
+  # LINT_STYLE_CMD: "npx prettier --check ."            #LANG:NODE
+  # LINT_STYLE_CMD: "black --check ${SRC_DIR}"          #LANG:PYTHON
+  # LINT_STYLE_CMD: "gofmt -l ."                        #LANG:GO
+
+  LINT_ANALYZERS_CMD: "dotnet build ${SOLUTION_FILE} --configuration ${BUILD_CONFIGURATION} /warnaserror"
+  # LINT_ANALYZERS_CMD: "mvn spotbugs:check"           #LANG:JAVA
+  # LINT_ANALYZERS_CMD: "npx tsc --noEmit"              #LANG:NODE (TypeScript)
+  # LINT_ANALYZERS_CMD: "mypy ${SRC_DIR}"               #LANG:PYTHON
+  # LINT_ANALYZERS_CMD: "go vet ./..."                  #LANG:GO
+
+  # ============================================================
+  # ЦЕНТРАЛИЗОВАННАЯ НАСТРОЙКА ХОСТОВ (одинаково для всех)
+  # ============================================================
+  APP_HOST: "localhost"
+  APP_PROTOCOL: "http"
+  GITFLIC_PORT: "8080"
+  SONARQUBE_PORT: "9000"
+
+  # Производные URL
+  GITFLIC_URL: "${APP_PROTOCOL}://${APP_HOST}:${GITFLIC_PORT}"
+  NUGET_SOURCE: "${APP_PROTOCOL}://${APP_HOST}:${GITFLIC_PORT}/project/root_admin/calculatorapp/package/-/${ARTIFACT_TYPE}/index.json"
+  SONARQUBE_URL_DEFAULT: "${APP_PROTOCOL}://${APP_HOST}:${SONARQUBE_PORT}"
+
+  # ============================================================
+  # НАСТРОЙКА ДЕПЛОЯ (одинаково для всех)
+  # ============================================================
+  DOCKER_DEPLOY_MODE: "local"
+  REMOTE_DOCKER_HOST: ""
+
+# ============================================================
+# ПЕРЕМЕННЫЕ CI/CD (Настройки -> CI/CD -> Переменные)
+# ============================================================
+# $TRANSPORT_TOKEN — токен для публикации артефактов
+# $SONARQUBE_TOKEN — токен SonarQube
+
+stages:
+  - build-test    # 1: Сборка и тесты (зависит от языка)
+  - lint          # 2: Линтеры (зависит от языка)
+  - analyze       # 3: Code Coverage / анализ (зависит от языка)
+  - security      # 4: SonarQube SAST (одинаково)
+  - package       # 5: Публикация артефактов (зависит от языка)
+  - docker-build  # 6: Сборка Docker-образа (одинаково)
+  - deploy        # 7: Деплой (одинаково)
+
+cache:
+  key: "${CI_COMMIT_REF_SLUG}"
+  paths:
+    - ~/.nuget/packages/   #LANG:.NET — кэш NuGet
+    # - ~/.m2/repository/  #LANG:JAVA — кэш Maven
+    # - node_modules/      #LANG:NODE — кэш npm
+    # - ~/.cache/pip/      #LANG:PYTHON — кэш pip
+    # - ~/go/pkg/mod/      #LANG:GO — кэш Go modules
+
+before_script:
+  # ============================================================
+  # ПОДГОТОВКА (зависит от языка) #LANG
+  # ============================================================
+
+  #LANG:.NET — установка .NET инструментов
+  - dotnet --version
+  - 'dotnet restore ${SOLUTION_FILE}'
+  - 'export PATH="$PATH:$HOME/.dotnet/tools:/root/.dotnet/tools"'
+
+  #LANG:JAVA — установка Java инструментов
+  # - java -version
+  # - mvn --version
+  # - 'mvn dependency:resolve -B'
+
+  #LANG:NODE — установка Node.js инструментов
+  # - node --version
+  # - npm --version
+  # - 'npm ci'
+
+  #LANG:PYTHON — установка Python инструментов
+  # - python --version
+  # - pip --version
+  # - 'pip install -r requirements.txt'
+
+  #LANG:GO — установка Go инструментов
+  # - go version
+  # - 'go mod download'
+
+  # ============================================================
+  # ОБЩАЯ ЧАСТЬ (одинаково для всех языков)
+  # ============================================================
+  - 'export LOCAL_IP=$(hostname -I 2>/dev/null | awk "{print \$1}")'
+  - 'export LOCAL_IP=${LOCAL_IP:-$APP_HOST}'
+  - 'echo "============================================"'
+  - 'echo "  APP_HOST:      $APP_HOST"'
+  - 'echo "  LOCAL_IP:      $LOCAL_IP"'
+  - 'echo "============================================"'
+
+  # SonarQube (одинаково для всех языков)
+  - 'export SQ_URL="${SONARQUBE_URL:-$SONARQUBE_URL_DEFAULT}"'
+  - 'test -n "$SONARQUBE_TOKEN" && echo "[SQ] Running ($SQ_URL)..." && dotnet sonarscanner begin /k:"${SONARQUBE_PROJECT_KEY:-CalculatorApp}" /d:sonar.host.url="$SQ_URL" /d:sonar.token="$SONARQUBE_TOKEN" && ${BUILD_CMD} && dotnet sonarscanner end /d:sonar.token="$SONARQUBE_TOKEN" && echo "[SQ] Done" || echo "[SQ] Skipped (no token)"'
+
+# ============================================================
+# СТАДИЯ 1: СБОРКА И ТЕСТЫ
+# ============================================================
+build-test:
+  stage: build-test
+  script:
+    # Сборка (команда из переменной BUILD_CMD) #LANG
+    - '${BUILD_CMD}'
+
+    # Модульные тесты (команда из переменной TEST_CMD + фильтр) #LANG
+    - '${TEST_CMD} ${UNIT_TEST_FILTER}'
+
+    # Интеграционные тесты (команда из переменной TEST_CMD + фильтр) #LANG
+    - '${TEST_CMD} ${INTEGRATION_TEST_FILTER}'
+  artifacts:
+    when: always
+    paths:
+      - '**/TestResults/'   #LANG:.NET — папка с результатами
+      # - 'target/surefire-reports/'  #LANG:JAVA
+      # - 'coverage/'                 #LANG:NODE
+      # - '.coverage'                 #LANG:PYTHON
+      # - 'coverage.out'              #LANG:GO
+    expire_in: 7 days
+  tags:
+    - shell
+
+# ============================================================
+# СТАДИЯ 2: ЛИНТЕРЫ
+# ============================================================
+# Команды берутся из переменных LINT_*_CMD — меняйте их под свой язык #LANG
+
+lint-format:
+  stage: lint
+  script:
+    - '${LINT_FORMAT_CMD}'
+  allow_failure: true
+  tags:
+    - shell
+
+lint-style:
+  stage: lint
+  script:
+    - '${LINT_STYLE_CMD}'
+  allow_failure: true
+  tags:
+    - shell
+
+lint-analyzers:
+  stage: lint
+  script:
+    - '${LINT_ANALYZERS_CMD}'
+  allow_failure: true
+  tags:
+    - shell
+
+# ============================================================
+# СТАДИЯ 3: АНАЛИЗ КОДА (Code Coverage)
+# ============================================================
+code-analysis:
+  stage: analyze
+  script:
+    - '${BUILD_CMD}'
+    #LANG:.NET — сбор покрытия для .NET
+    - 'dotnet test ${SOLUTION_FILE} --configuration ${BUILD_CONFIGURATION} --no-build --collect:"XPlat Code Coverage"'
+    #LANG:JAVA — сбор покрытия для Java
+    # - 'mvn jacoco:report -B'
+    #LANG:NODE — сбор покрытия для Node.js
+    # - 'npx jest --coverage'
+    #LANG:PYTHON — сбор покрытия для Python
+    # - 'pytest --cov=${SRC_DIR} --cov-report=xml'
+    #LANG:GO — сбор покрытия для Go
+    # - 'go test -coverprofile=coverage.out ./...'
+  allow_failure: true
+  tags:
+    - shell
+
+# ============================================================
+# СТАДИЯ 4: SAST — SonarQube (одинаково для всех языков)
+# ============================================================
+sast-sonarqube:
+  stage: security
+  script:
+    - 'echo "=== SonarQube: analysis was done in before_script ==="'
+  allow_failure: true
+  tags:
+    - shell
+
+# ============================================================
+# СТАДИЯ 5: ПУБЛИКАЦИЯ АРТЕФАКТОВ
+# ============================================================
+# Команда упаковки и тип артефакта — в переменных PACK_CMD и ARTIFACT_PATH #LANG
+publish-artifact:
+  stage: package
+  script:
+    - 'echo "=== PACK ==="'
+    - '${PACK_CMD}'
+    - 'echo "=== PUSH to ${NUGET_SOURCE} ==="'
+    #LANG:.NET / JAVA / NODE / PYTHON / GO — команда публикации
+    - 'dotnet nuget push ${ARTIFACT_PATH} --source ${NUGET_SOURCE} --api-key $TRANSPORT_TOKEN --allow-insecure-connections --skip-duplicate'
+    #LANG:JAVA
+    # - 'mvn deploy -B -DaltDeploymentRepository=gitflic::default::${NUGET_SOURCE}'
+    #LANG:NODE
+    # - 'npm publish --registry ${NUGET_SOURCE}'
+    #LANG:PYTHON
+    # - 'twine upload --repository-url ${NUGET_SOURCE} ${ARTIFACT_PATH}'
+  artifacts:
+    paths:
+      - ./artifacts/
+    expire_in: 7 days
+  tags:
+    - shell
+
+# ============================================================
+# СТАДИЯ 6: СБОРКА DOCKER-ОБРАЗА (одинаково для всех языков)
+# ============================================================
+docker-build:
+  stage: docker-build
+  script:
+    - 'echo "=== DOCKER BUILD (mode: $DOCKER_DEPLOY_MODE) ==="'
+    - |
+      if [ "$DOCKER_DEPLOY_MODE" = "remote" ] && [ -n "$REMOTE_DOCKER_HOST" ]; then
+        DOCKER_CMD="docker -H tcp://$REMOTE_DOCKER_HOST:2375"
+      elif [ "$DOCKER_DEPLOY_MODE" = "gitflic" ]; then
+        DOCKER_CMD="docker -H tcp://$APP_HOST:2375"
+      else
+        DOCKER_CMD="docker"
+      fi
+    - $DOCKER_CMD build -t $DOCKER_IMAGE:latest .
+    - 'COMMIT_SHA=$(git rev-parse --short HEAD)'
+    - '$DOCKER_CMD tag $DOCKER_IMAGE:latest $DOCKER_IMAGE:$COMMIT_SHA'
+    - $DOCKER_CMD images | grep $DOCKER_IMAGE
+  tags:
+    - shell
+
+# ============================================================
+# СТАДИЯ 7: ДЕПЛОЙ (одинаково для всех языков)
+# ============================================================
+deploy-auto:
+  stage: deploy
+  script:
+    - 'echo "=== AUTO DEPLOY (mode: $DOCKER_DEPLOY_MODE) ==="'
+    - |
+      if [ "$DOCKER_DEPLOY_MODE" = "remote" ] && [ -n "$REMOTE_DOCKER_HOST" ]; then
+        DOCKER_CMD="docker -H tcp://$REMOTE_DOCKER_HOST:2375"
+        HEALTH_URL="http://$REMOTE_DOCKER_HOST:$APP_PORT/health"
+      elif [ "$DOCKER_DEPLOY_MODE" = "gitflic" ]; then
+        DOCKER_CMD="docker -H tcp://$APP_HOST:2375"
+        HEALTH_URL="http://$APP_HOST:$APP_PORT/health"
+      else
+        DOCKER_CMD="docker"
+        HEALTH_URL="http://$LOCAL_IP:$APP_PORT/health"
+      fi
+    - $DOCKER_CMD stop $CONTAINER_NAME 2>/dev/null || true
+    - $DOCKER_CMD rm $CONTAINER_NAME 2>/dev/null || true
+    - $DOCKER_CMD image prune -f 2>/dev/null || true
+    - 'if [ "$DOCKER_DEPLOY_MODE" = "local" ]; then mkdir -p $LOG_DIR; fi'
+    - $DOCKER_CMD run -d --name $CONTAINER_NAME -p $APP_PORT:$INTERNAL_PORT --restart always -e ASPNETCORE_ENVIRONMENT=Production -e ASPNETCORE_URLS="http://+:$INTERNAL_PORT" $DOCKER_IMAGE:latest
+    - sleep 10
+    - $DOCKER_CMD ps --filter "name=$CONTAINER_NAME"
+    - wget -qO- $HEALTH_URL && echo "DEPLOY OK" || (echo "DEPLOY FAIL" && exit 1)
+    - $DOCKER_CMD logs --tail 20 $CONTAINER_NAME
+  tags:
+    - shell
+
+# ============================================================
+# ШПАРГАЛКА ПО ЯЗЫКАМ
+# ============================================================
+#
+# .NET (C#):
+#   SOLUTION_FILE = CalculatorApp.slnx
+#   BUILD_CMD = dotnet build
+#   TEST_CMD = dotnet test
+#   PACK_CMD = dotnet pack
+#   LINT_CMD = dotnet format
+#
+# Java (Maven):
+#   SOLUTION_FILE = pom.xml
+#   BUILD_CMD = mvn compile -B
+#   TEST_CMD = mvn test -B
+#   PACK_CMD = mvn package -B
+#   LINT_CMD = mvn checkstyle:check
+#
+# Node.js (npm):
+#   SOLUTION_FILE = package.json
+#   BUILD_CMD = npm run build
+#   TEST_CMD = npm test
+#   PACK_CMD = npm pack
+#   LINT_CMD = npx eslint .
+#
+# Python (pip):
+#   SOLUTION_FILE = pyproject.toml
+#   BUILD_CMD = python -m compileall src/
+#   TEST_CMD = pytest
+#   PACK_CMD = python -m build
+#   LINT_CMD = ruff check src/
+#
+# Go:
+#   SOLUTION_FILE = go.mod
+#   BUILD_CMD = go build -o app ./cmd/app/
+#   TEST_CMD = go test ./...
+#   PACK_CMD = tar -czf app.tar.gz app
+#   LINT_CMD = golangci-lint run
+#
+# ============================================================
