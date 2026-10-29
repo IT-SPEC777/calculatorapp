@@ -1,0 +1,9 @@
+.nuget/
+bin/
+obj/
+publish/
+.vs/
+*.user".nuget/" 
+".vs/" 
+"bin/" 
+"obj/" 
