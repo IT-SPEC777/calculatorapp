@@ -1,0 +1,349 @@
+# =============================================================================
+#  CI/CD Pipeline для .NET приложений
+#  Версия: 7.0 — Финальная сборка (с DEPLOY_TOKEN и правильным .gitignore)
+# =============================================================================
+
+image: mcr.microsoft.com/dotnet/sdk:10.0
+
+variables:
+  APP_NAME: "calculator-api"
+  SOLUTION_FILE: "CalculatorApp.slnx"
+  BUILD_CONFIGURATION: "Release"
+  DOCKERFILE_PATH: "Dockerfile"
+  IMAGE_TAG: "${CI_COMMIT_SHORT_SHA}"
+  DEPLOY_ENABLED: "false"
+  DEPLOY_TARGET: "production"
+  REGISTRY_TYPE: "nexus"
+  NUGET_FALLBACK_PACKAGES: ""
+  NUGET_PACKAGES: "${CI_PROJECT_DIR}/.nuget/packages"
+  SKIP_TOOL_INSTALL: "false"
+
+stages:
+  - precheck
+  - install-tools
+  - restore
+  - build
+  - test
+  - code-quality
+  - publish
+  - docker-build
+  - image-push
+  - deploy
+  - cleanup
+
+cache:
+  key: "${CI_COMMIT_REF_SLUG}"
+  paths:
+    - .nuget/packages/
+    - ~/.local/share/dotnet/
+    - /root/.dotnet/tools
+
+before_script:
+  - export PATH="$PATH:/root/.dotnet/tools"
+  - export NUGET_FALLBACK_PACKAGES=""
+  - export NUGET_PACKAGES="${CI_PROJECT_DIR}/.nuget/packages"
+  - dotnet nuget locals all --clear || true
+  - |
+    if [ -f "${CI_PROJECT_DIR}/nuget.config" ]; then
+      cp -v "${CI_PROJECT_DIR}/nuget.config" "${CI_PROJECT_DIR}/NuGet.Config"
+    elif [ -f "${CI_PROJECT_DIR}/NuGet.Config" ]; then
+      echo "NuGet.Config уже существует"
+    else
+      echo "ОШИБКА: nuget.config не найден!"
+      exit 1
+    fi
+  - export NUGET_CONFIG_PATH="${CI_PROJECT_DIR}/NuGet.Config"
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  СТАДИИ
+# ═════════════════════════════════════════════════════════════════════════════
+
+precheck:
+  stage: precheck
+  tags: [ shell ]
+  script:
+    - 'echo "[STAGE: PRECHECK] ДИАГНОСТИКА ОКРУЖЕНИЯ"'
+    - |
+      if [ ! -f "${SOLUTION_FILE}" ]; then
+        echo "[ERROR] Файл решения ${SOLUTION_FILE} не найден!"
+        ls -la
+        exit 1
+      fi
+    - |
+      for tool in git curl jq docker dotnet; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+          echo "  [ERROR] $tool не найден"
+          exit 1
+        fi
+      done
+
+install-tools:
+  stage: install-tools
+  tags: [ shell ]
+  rules:
+    - if: $SKIP_TOOL_INSTALL != "true"
+  script:
+    - export PATH="$PATH:/root/.dotnet/tools"
+    - dotnet tool install --global dotnet-format || true
+    - dotnet tool install --global dotnet-sonarscanner || true
+  allow_failure: true
+
+restore:
+  stage: restore
+  tags: [ shell ]
+  script:
+    - dotnet restore "${SOLUTION_FILE}" --configfile "${NUGET_CONFIG_PATH}"
+  artifacts:
+    paths:
+      - .nuget/packages/
+    expire_in: 1 day
+
+build:
+  stage: build
+  tags: [ shell ]
+  dependencies:
+    - restore
+  script:
+    - dotnet build "${SOLUTION_FILE}" --configfile "${NUGET_CONFIG_PATH}" --configuration ${BUILD_CONFIGURATION}
+  artifacts:
+    paths:
+      - bin/
+      - obj/
+    expire_in: 1 day
+
+test:
+  stage: test
+  tags: [ shell ]
+  dependencies:
+    - build
+  script:
+    - dotnet test "${SOLUTION_FILE}" --configuration ${BUILD_CONFIGURATION} --no-build --collect:"XPlat Code Coverage"
+  artifacts:
+    when: always
+    paths:
+      - '**/TestResults/'
+    expire_in: 7 days
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  СТАДИЯ: CODE-QUALITY
+# ═════════════════════════════════════════════════════════════════════════════
+
+lint-format:
+  stage: code-quality
+  tags: [ shell ]
+  dependencies:
+    - build
+  script:
+    - dotnet format "${SOLUTION_FILE}" --verify-no-changes --verbosity diagnostic
+  allow_failure: true
+
+lint-style:
+  stage: code-quality
+  tags: [ shell ]
+  dependencies:
+    - build
+  script:
+    - dotnet format "${SOLUTION_FILE}" --severity info --verify-no-changes
+  allow_failure: true
+
+lint-analyzers:
+  stage: code-quality
+  tags: [ shell ]
+  dependencies:
+    - build
+  script:
+    - dotnet build "${SOLUTION_FILE}" --configuration ${BUILD_CONFIGURATION} /warnaserror --no-restore
+  allow_failure: true
+
+format-fix:
+  stage: code-quality
+  tags: [ shell ]
+  dependencies:
+    - build
+  rules:
+    - if: $FORMAT_FIX_ENABLED == "true"
+      when: always
+    - when: never
+  script:
+    - 'echo "--- ЗАПУСК АВТОИСПРАВЛЕНИЯ ФОРМАТИРОВАНИЯ ---"'
+    - dotnet format "${SOLUTION_FILE}"
+    - 'echo "Форматирование исправлено. Подготовка к коммиту..."'
+    - git config --global user.name "GitFlic CI"
+    - git config --global user.email "ci@gitflic.local"
+    
+    # Коммитим ТОЛЬКО файлы .cs, чтобы не коммитить кэш и артефакты
+    - git add '*.cs' || echo "Нет изменений в .cs файлах"
+    
+    - git commit -m "Auto-fix code formatting [skip ci]" || echo "Нечего коммитить"
+    - |
+      TARGET_BRANCH="${CI_COMMIT_BRANCH:-$CI_COMMIT_REF_NAME}"
+      if [ -z "$TARGET_BRANCH" ]; then
+        echo "ОШИБКА: Не удалось определить имя ветки для пуша."
+        exit 1
+      fi
+      
+      if git diff --quiet HEAD~1 HEAD; then
+        echo "Изменений нет, пуш не требуется."
+      else
+        echo "Отправка изменений в ветку: $TARGET_BRANCH..."
+        
+        # Проверяем, что токен задан
+        if [ -z "${DEPLOY_TOKEN:-}" ]; then
+          echo "ОШИБКА: Переменная DEPLOY_TOKEN не задана в настройках GitFlic!"
+          exit 1
+        fi
+        
+        # Подставляем токен в URL для авторизации
+        # Замените root_admin и имя проекта на ваши, если они отличаются
+        git remote set-url origin "https://root_admin:${DEPLOY_TOKEN}@localhost:443/project/root_admin/calculatorapp.git"
+        git push origin HEAD:$TARGET_BRANCH
+      fi
+
+sonarqube:
+  stage: code-quality
+  tags: [ shell ]
+  dependencies:
+    - test
+    - build
+  rules:
+    - if: $SONARQUBE_TOKEN != null && $SONARQUBE_TOKEN != ""
+  script:
+    - export PATH="$PATH:/root/.dotnet/tools"
+    - export SQ_URL="${SONARQUBE_URL:-http://localhost:9000}"
+    - export COVERAGE_FILE=$(find . -name "coverage.cobertura.xml" | head -1)
+    - export COVERAGE_PARAM=""
+    - |
+      if [ -n "$COVERAGE_FILE" ]; then
+        export COVERAGE_PARAM="/d:sonar.cs.opencover.reportsPaths=$COVERAGE_FILE"
+      fi
+    - |
+      if ! command -v dotnet-sonarscanner >/dev/null 2>&1; then
+        echo "Утилита dotnet-sonarscanner не найдена. Установка..."
+        dotnet tool install --global dotnet-sonarscanner
+      fi
+    - dotnet sonarscanner begin /k:"${SONARQUBE_PROJECT_KEY:-CalculatorApp}" /d:sonar.host.url="$SQ_URL" /d:sonar.token="$SONARQUBE_TOKEN" $COVERAGE_PARAM
+    - dotnet build "${SOLUTION_FILE}" --configuration ${BUILD_CONFIGURATION} --no-restore
+    - dotnet sonarscanner end /d:sonar.token="$SONARQUBE_TOKEN"
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  СТАДИЯ: PUBLISH И DOCKER
+# ═════════════════════════════════════════════════════════════════════════════
+
+publish:
+  stage: publish
+  tags: [ shell ]
+  dependencies:
+    - build
+  script:
+    - dotnet publish "${SOLUTION_FILE}" --configfile "${NUGET_CONFIG_PATH}" --configuration ${BUILD_CONFIGURATION} --no-restore --output ./publish
+  artifacts:
+    paths:
+      - ./publish/
+    expire_in: 7 days
+
+docker-build:
+  stage: docker-build
+  tags: [ shell ]
+  dependencies:
+    - publish
+  script:
+    - |
+      if [ ! -d "./publish" ] || [ -z "$(ls -A ./publish)" ]; then
+        echo "ERROR: Папка publish пуста или отсутствует"
+        exit 1
+      fi
+    - IMAGE_TAG="${CI_COMMIT_SHORT_SHA:-latest}"
+    - docker build -t "${APP_NAME}:${IMAGE_TAG}" -f "${DOCKERFILE_PATH}" .
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  СТАДИЯ: IMAGE-PUSH (С ОТЛАДКОЙ И ПРОВЕРКОЙ API)
+# ═════════════════════════════════════════════════════════════════════════════
+
+image-push:
+  stage: image-push
+  tags: [ shell ]
+  dependencies:
+    - docker-build
+  script:
+    - 'echo "============================================================"'
+    - 'echo "  [STAGE: IMAGE-PUSH] ПУБЛИКАЦИЯ ОБРАЗА В РЕЕСТР"'
+    - 'echo "============================================================"'
+    - 'echo "--- DEBUG: Проверка переменных окружения ---"'
+    - 'echo "NEXUS_HOST     = [${NEXUS_HOST:-EMPTY}]"'
+    - 'echo "NEXUS_PORT     = [${NEXUS_PORT:-EMPTY}]"'
+    - 'echo "NEXUS_USER     = [${NEXUS_USER:-EMPTY}]"'
+    - 'echo "NEXUS_PASSWORD = [${NEXUS_PASSWORD:+SET (скрыт)}]"'
+    - 'echo "--- DEBUG: Проверка пользователя ---"'
+    - whoami
+    - 'echo "HOME=$HOME"'
+    - |
+      if [ -z "${NEXUS_HOST:-}" ] || [ -z "${NEXUS_PORT:-}" ] || [ -z "${NEXUS_USER:-}" ] || [ -z "${NEXUS_PASSWORD:-}" ]; then
+        echo "ERROR: Nexus configuration incomplete (проверьте переменные в GUI GitFlic)"
+        exit 1
+      fi
+    - export REGISTRY_URL="${NEXUS_HOST}:${NEXUS_PORT}"
+    - export REGISTRY_PROJECT="docker-hosted"
+    - export REGISTRY_USER="${NEXUS_USER}"
+    - export REGISTRY_PASSWORD="${NEXUS_PASSWORD}"
+    - export IMAGE_TAG="${CI_COMMIT_SHORT_SHA:-latest}"
+    - export LOCAL_IMAGE="${APP_NAME}:${IMAGE_TAG}"
+    - export REMOTE_IMAGE="${REGISTRY_URL}/${REGISTRY_PROJECT}/${APP_NAME}:${IMAGE_TAG}"
+    - 'echo "Локальный образ: $LOCAL_IMAGE"'
+    - 'echo "Удалённый образ: $REMOTE_IMAGE"'
+    - 'echo "--- Логин в реестр ${REGISTRY_URL} ---"'
+    - echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_URL}" -u "${REGISTRY_USER}" --password-stdin
+    - docker tag "${LOCAL_IMAGE}" "${REMOTE_IMAGE}"
+    - 'echo "--- Отправка образа ---"'
+    - docker push "${REMOTE_IMAGE}"
+    - 'echo "--- Проверка через API Nexus ---"'
+    - export CATALOG=$(curl -s -u "${REGISTRY_USER}:${REGISTRY_PASSWORD}" "http://${REGISTRY_URL}/v2/_catalog")
+    - |
+      if echo "$CATALOG" | grep -q "${APP_NAME}"; then
+        echo "[OK] Образ успешно загружен и виден в API Nexus!"
+      else
+        echo "ERROR: Docker сказал 'OK', но Nexus не видит образ в каталоге!"
+        echo "Текущий каталог Nexus: $CATALOG"
+        exit 1
+      fi
+    - 'echo "  [OK] Образ опубликован в ${REGISTRY_TYPE}"'
+    - 'echo "============================================================"'
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  СТАДИЯ: DEPLOY И CLEANUP
+# ═════════════════════════════════════════════════════════════════════════════
+
+deploy:
+  stage: deploy
+  tags: [ shell ]
+  dependencies:
+    - docker-build
+  rules:
+    - if: $DEPLOY_ENABLED == "true"
+  script:
+    - IMAGE_TAG="${CI_COMMIT_SHORT_SHA:-latest}"
+    - LOCAL_IMAGE="${APP_NAME}:${IMAGE_TAG}"
+    - CONTAINER_NAME="${APP_NAME}-container"
+    - docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+    - docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+    - docker run -d --name "${CONTAINER_NAME}" -p 5000:80 "${LOCAL_IMAGE}"
+    - sleep 5
+    - |
+      if curl -sf http://localhost:5000/health; then
+        echo "  [OK] Healthcheck пройден"
+      else
+        echo "  [ERROR] Healthcheck failed"
+        exit 1
+      fi
+
+cleanup:
+  stage: cleanup
+  tags: [ shell ]
+  when: always
+  script:
+    - |
+      if command -v docker >/dev/null 2>&1; then
+        docker image prune -f --filter "until=168h" || true
+        docker builder prune -f || true
+      fi
+    - rm -rf /tmp/NuGetScratchroot 2>/dev/null || true
+    - rm -rf /tmp/docker-* 2>/dev/null || true
